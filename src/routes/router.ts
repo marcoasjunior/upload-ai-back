@@ -2,9 +2,10 @@ import { FastifyInstance } from 'fastify';
 import { prisma } from '../lib/prisma'
 import { fastifyMultipart } from '@fastify/multipart'
 import path from 'node:path';
-import fs from 'node:fs';
+import fs, { createReadStream } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
 import { z } from 'zod';
+import { openai } from '../lib/openai';
 
 export async function router(fastify: FastifyInstance) {
     fastify.register(fastifyMultipart, {
@@ -25,15 +26,12 @@ export async function router(fastify: FastifyInstance) {
         }
 
         const extension = path.extname(data.filename)
-
         if (extension !== '.mp3') {
             return reply.status(400).send({ error: 'Invalid file type' })
         }
 
         const fileBaseName = path.basename(data.filename, extension)
-
         const fileUploadName = `${fileBaseName}-${Date.now()}${extension}`
-
         const uploadPath = path.resolve(__dirname, '../../tmp', fileUploadName)
 
         await pipeline(data.file, fs.createWriteStream(uploadPath)) // ALTEREI DO ORIGINAL, ELE USOU COM O PROMISIFY
@@ -62,15 +60,59 @@ export async function router(fastify: FastifyInstance) {
 
         const { prompt } = bodySchema.parse(request.body)
 
-        return {
-            videoId,
-            prompt
-        }
+        const video = await prisma.video.findUniqueOrThrow({
+            where: {
+                id: videoId
+            }
+        })
 
+        const videoPath = video.path
+
+        const audioReadStream = createReadStream(videoPath)
+
+        const response = await openai.audio.transcriptions.create({
+            file: audioReadStream,
+            model: 'whisper-1',
+            language: 'pt',
+            response_format: 'json',
+            temperature: 0,
+            prompt
+
+        })
+
+        const transcription = response.text
+
+        await prisma.video.update({
+            where: {
+                id: videoId
+            },
+            data: {
+                transcription
+            }
+        })
+
+        return { transcription }
 
     })
 
+    fastify.post('/ai/complete', async (request, reply) => {
+        const bodySchema = z.object({
+            videoId: z.string().uuid(),
+            template: z.string(),
+            temperature: z.number().min(0).max(1).default(0.5),
+        })
 
+        const { videoId, template, temperature } = bodySchema.parse(request.body)
+
+        return {
+            videoId,
+            template,
+            temperature
+        }
+
+        
+
+    })
 
 }
 
