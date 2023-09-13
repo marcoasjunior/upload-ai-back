@@ -3,8 +3,6 @@ import { router } from './routes/router';
 
 const app = fastify();
 
-// add routes from router.ts
-
 app.register(router);
 
 app.listen({
